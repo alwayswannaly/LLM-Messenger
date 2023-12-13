@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  api:
+    image: alwayswannaly/llm-messenger-backend:1.0
+    platform: linux/x86_64
+    build:
+      context: ./api
+      dockerfile: api.dockerfile
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      RAILS_ENV: development
+    ports:
+      - "8080:8080"
+    env_file: api/.env
+    depends_on:
+      - "database"
+      - "redis"
+    volumes:
+      - ./api:/app
+
+  database:
+    image: postgres:12.1
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./api/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7.0.4-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/var/lib/redis/data
+
+  sidekiq:
+    image: alwayswannaly/llm-messenger-backend:1.0
+    build:
+      context: ./api
+      dockerfile: api.dockerfile
+    platform: linux/x86_64
+    depends_on:
+      - api
+      - database
+      - redis
+    env_file: api/.env
+    environment:
+      RAILS_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+    entrypoint: ./entrypoints/sidekiq-init.sh
+    volumes:
+      - ./api:/app
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx.dockerfile
+    depends_on:
+      - api
+    ports:
+      - '8000:8000'
+
+volumes:
+  db_data:
+  redis_data:
