@@ -5,6 +5,8 @@ Rails.application.routes.draw do
   # root "articles#index"
 
   namespace :api do
-    resources :prompt, only: %i[index]
+    resources :prompt, only: %i[index] do
+      get '/stream', action: 'stream'
+    end
   end
 end

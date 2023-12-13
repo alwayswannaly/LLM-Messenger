@@ -56,3 +56,5 @@ gem 'listen', '~> 3.3'
 gem 'activerecord-import'
 gem 'jsonapi-serializer'
 gem 'hiredis'
+
+gem 'net-http'

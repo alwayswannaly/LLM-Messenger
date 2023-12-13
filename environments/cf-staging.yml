@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: llm-messenger-staging
+    Description: llm-messenger-staging
+
+  VpcCIDR:
+    Type: String
+    Default: '10.0.0.0/16'
+    Description: CIDR block for the VPC
+
+Resources:
+  MyVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-VPC'
+
+  SubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.0.0/24'
+      AvailabilityZone: 'us-west-2a'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-SubnetA'
+
+  SubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: 'us-west-2b'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-SubnetB'
+
+  CacheSubnetGroup:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      CacheSubnetGroupName: !Sub '${EnvironmentName}-cachesubnet'
+      Description: 'My Cache Subnet Group'
+      SubnetIds:
+        - !Ref 'SubnetA'
+        - !Ref 'SubnetB'
+
+  RDSSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupName: !Sub '${EnvironmentName}-RdsSubnet'
+      DBSubnetGroupDescription: 'My RDS Subnet Group'
+      SubnetIds:
+        - !Ref 'SubnetA'
+        - !Ref 'SubnetB'
+
+  MyInternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-IGW'
+
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref 'MyVPC'
+      InternetGatewayId: !Ref 'MyInternetGateway'
+
+  RDSDatabase:
+    Type: 'AWS::RDS::DBInstance'
+    DependsOn: RDSSubnetGroup
+    Properties:
+      Engine: 'postgres'
+      DBInstanceIdentifier: !Sub '${EnvironmentName}-RDS'
+      MasterUsername: 'mitadmin'
+      MasterUserPassword: 'mitadmin123'
+      AllocatedStorage: 100
+      DBInstanceClass: 'db.t3.large'
+      VPCSecurityGroups: [ !GetAtt MyRDSSecurityGroup.GroupId ]
+      MultiAZ: false
+      StorageType: 'gp2'
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      DBSubnetGroupName: !Sub '${EnvironmentName}-RdsSubnet'
+
+  MyRDSSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security group for RDS'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '0.0.0.0/0'
+
+  RedisCluster:
+    Type: 'AWS::ElastiCache::ReplicationGroup'
+    DependsOn: CacheSubnetGroup
+    Properties:
+      ReplicationGroupId: !Sub '${EnvironmentName}-RedisCluster'
+      ReplicationGroupDescription: 'My Redis Cluster'
+      NumCacheClusters: 1
+      CacheNodeType: 'cache.t2.micro'
+      Engine: 'redis'
+      Port: 6379
+      CacheSubnetGroupName: !Sub '${EnvironmentName}-cachesubnet'
+      SecurityGroupIds:
+        - !GetAtt 'ElastiCacheSecurityGroup.GroupId'
+      AutomaticFailoverEnabled: false
+
+  ElastiCacheSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security group for ElastiCache'
+      VpcId: !Ref 'MyVPC'
+
+  MyECSSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security group for ECS tasks'
+      VpcId: !Ref MyVPC
+
+  MyECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub '${EnvironmentName}-ECSCluster'
+
+  MyECSTaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    DependsOn: RedisCluster
+    Properties:
+      Family: !Sub '${EnvironmentName}-MyAppTask'
+      NetworkMode: 'awsvpc'
+      RequiresCompatibilities: [ 'EC2' ]
+      ContainerDefinitions:
+        - Name: 'MyAppContainer'
+          Image: '555073836652.dkr.ecr.us-west-2.amazonaws.com/llm-messenger:alpha'
+          Memory: 8000
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: 'DATABASE_URL'
+              Value: !Sub 'postgres://mitadmin:mitadmin123@${RDSDatabase.Endpoint.Address}:5432/apifrenzy'
+            - Name: 'REDIS_URL'
+              Value: !Sub 'redis://llm-messenger-staging-rediscluster.q16vzl.ng.0001.usw2.cache.amazonaws.com:6379/1'
+            - Name: 'RAILS_ENV'
+              Value: 'Staging'
+      ExecutionRoleArn: !GetAtt MyECSTaskExecutionRole.Arn
+
+  MyECSTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-MyAppTaskExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'MyAppTaskPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:BatchGetImage'
+                Resource: '*'
+
+  MyECSService:
+    Type: 'AWS::ECS::Service'
+    DependsOn: MyECSTaskDefinition
+    Properties:
+      Cluster: !Ref MyECSCluster
+      TaskDefinition: !Ref MyECSTaskDefinition
+      LaunchType: 'EC2'
+      DesiredCount: 1
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: 
+            - !Ref SubnetA
+            - !Ref SubnetB
+          SecurityGroups: [ !GetAtt MyECSSecurityGroup.GroupId ]
