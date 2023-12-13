@@ -147,7 +147,7 @@ Resources:
             - ContainerPort: 8080
           Environment:
             - Name: 'DATABASE_URL'
-              Value: !Sub 'postgres://mitadmin:mitadmin123@${RDSDatabase.Endpoint.Address}:5432/apifrenzy'
+              Value: !Sub 'postgres://mitadmin:mitadmin123@llm-messenger-staging-rds.cwgkgnfvhifq.us-west-2.rds.amazonaws.com:5432/apifrenzy'
             - Name: 'REDIS_URL'
               Value: !Sub 'redis://llm-messenger-staging-rediscluster.q16vzl.ng.0001.usw2.cache.amazonaws.com:6379/1'
             - Name: 'RAILS_ENV'
